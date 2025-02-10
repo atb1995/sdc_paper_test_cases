@@ -23,21 +23,19 @@ from gusto import (
     ForwardEuler, saturated_hydrostatic_balance, thermodynamics, Recoverer,
     CompressibleSolver, Timestepper, split_continuity_form,
     IMEXRungeKutta, time_derivative, transport, implicit, explicit, physics_label,
-    IMEX_Euler, SDC, SplitPhysicsTimestepper, IMEX_SSP3, source_label, SUPGOptions,
-    horizontal, vertical, Split_DGUpwind, split_hv_advective_form
+    IMEX_Euler, SDC, SplitPhysicsTimestepper, MixedFSOptions, IMEX_SSP3, SUPGOptions,
+    IMEX_ARK2
 )
 
 import numpy as np
-
-import time
 
 moist_bryan_fritsch_defaults = {
     'ncolumns': 100,
     'nlayers': 100,
     'dt': 1.0,
-    'tmax': 1.0,
-    'dumpfreq': 125,
-    'dirname': 'moist_bryan_fritsch_imex_sdc_nonsplit'
+    'tmax': 1000.0,
+    'dumpfreq': 50,
+    'dirname': 'moist_bryan_fritsch_imex_sdc_split_phys'
 }
 
 
@@ -65,7 +63,7 @@ def moist_bryan_fritsch(
     # Our settings for this set up
     # ------------------------------------------------------------------------ #
     element_order = 1
-    u_eqn_type = 'vector_invariant_form'
+    u_eqn_type = 'vector_advection_form'
 
     # ------------------------------------------------------------------------ #
     # Set up model objects
@@ -83,15 +81,14 @@ def moist_bryan_fritsch(
     tracers = [WaterVapour(), CloudWater()]
     eqns = CompressibleEulerEquations(
         domain, params, active_tracers=tracers, u_transport_option=u_eqn_type)
-
     eqns = split_continuity_form(eqns)
-    eqns = split_hv_advective_form(eqns, "rho")
-    eqns = split_hv_advective_form(eqns, "theta")
+    eqns.label_terms(lambda t: not any(t.has_label(time_derivative, transport, physics_label)), implicit)
+    eqns.label_terms(lambda t: t.has_label(transport), explicit)
 
+    opts =SUPGOptions(suboptions={"theta": [time_derivative, transport],
+                                   "water_vapour":[time_derivative, transport],
+                                   "cloud_water": [time_derivative, transport]})
 
-    opts =SUPGOptions(suboptions={"theta": [transport],
-                                "water_vapour":[transport],
-                                "cloud_water": [transport]})
     # Check number of optimal cores
     print("Opt Cores:", eqns.X.function_space().dim()/50000.)
     # I/O
@@ -102,16 +99,18 @@ def moist_bryan_fritsch(
     io = IO(domain, output, diagnostic_fields=diagnostic_fields)
 
     transport_methods = [
-        DGUpwind(eqns, "u"), Split_DGUpwind(eqns, "rho"), Split_DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp),
-        DGUpwind(eqns, "water_vapour", ibp=SUPGOptions.ibp), DGUpwind(eqns, "cloud_water", ibp=SUPGOptions.ibp) 
+        DGUpwind(eqns, "u"), DGUpwind(eqns, "rho"), DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp), DGUpwind(eqns, "water_vapour", ibp=SUPGOptions.ibp), DGUpwind(eqns, "cloud_water", ibp=SUPGOptions.ibp) 
     ]
+    # transport_methods = [
+    #     DGUpwind(eqns, "u"), DGUpwind(eqns, "rho"), DGUpwind(eqns, "theta"), DGUpwind(eqns, "water_vapour"), DGUpwind(eqns, "cloud_water") 
+    # ]
 
     nl_solver_parameters = {
     "snes_converged_reason": None,
-    "snes_lag_preconditioner_persists":None,
-    "snes_lag_preconditioner":-2,
-    "snes_lag_jacobian": -2,
-    "snes_lag_jacobian_persists": None,
+    "snes_lag_jacobian_persists":True,
+    "snes_lag_jacobian":15,
+    "snes_lag_preconditioner_persists":True,
+    "snes_lag_preconditioner":4, 
     'ksp_ew': None,
     'ksp_ew_version': 1,
     "ksp_ew_threshold": 1e-2,
@@ -121,8 +120,8 @@ def moist_bryan_fritsch(
     "ksp_converged_reason": None,
     "ksp_atol": 1e-4,
     "ksp_rtol": 1e-4,
-    "snes_atol": 1e-4,
-    "snes_rtol": 1e-4,
+    "snes_atol": 1e-3,
+    "snes_rtol": 1e-3,
     "ksp_max_it": 400,
     "pc_type": "python",
     "pc_python_type": "firedrake.AssembledPC","assembled": {
@@ -139,23 +138,21 @@ def moist_bryan_fritsch(
             }
         },
     },}
-    physics_schemes = [SaturationAdjustment(eqns)]
-    eqns.label_terms(lambda t: not any(t.has_label(time_derivative, transport, source_label)), implicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and t.has_label(horizontal), explicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and t.has_label(vertical), implicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and not any(t.has_label(horizontal, vertical)), explicit)
-    base_scheme = IMEX_Euler(domain, options=opts, nonlinear_solver_parameters=nl_solver_parameters)
-    node_type = "LEGENDRE"
-    qdelta_exp = "FE"
-    quad_type = "RADAU-RIGHT"
-    M = 3
-    k = 5
-    qdelta_imp = "LU"
-    scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
-                        qdelta_exp, formulation="Z2N", options=opts, nonlinear_solver_parameters=nl_solver_parameters,final_update=False, initial_guess="copy")
-    #scheme = IMEX_SSP3(domain, nonlinear_solver_parameters=nl_solver_parameters)
+
+    # eqns.label_terms(lambda t: not any(t.has_label(time_derivative, transport, physics_label)), implicit)
+    # eqns.label_terms(lambda t: t.has_label(transport), explicit)
+    scheme = IMEX_SSP3(domain, options=opts, nonlinear_solver_parameters=nl_solver_parameters)
+    # node_type = "LEGENDRE"
+    # qdelta_exp = "FE"
+    # quad_type = "GAUSS"
+    # M = 2
+    # k = 3
+    # qdelta_imp = "LU"
+    # scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
+    #                     qdelta_exp, formulation="Z2N", nonlinear_solver_parameters=nl_solver_parameters,final_update=True, initial_guess="copy", options=opts)
     # Time stepper
-    stepper = Timestepper(eqns, scheme, io, transport_methods, physics_parametrisations=physics_schemes)
+    physics_schemes = [(SaturationAdjustment(eqns), ForwardEuler(domain))]
+    stepper = SplitPhysicsTimestepper(eqns, scheme, io, transport_methods, physics_schemes=physics_schemes)
 
 
     # ------------------------------------------------------------------------ #
@@ -248,11 +245,8 @@ def moist_bryan_fritsch(
     # ------------------------------------------------------------------------ #
     # Run
     # ------------------------------------------------------------------------ #
-    initial_time = time.time()
+
     stepper.run(t=0, tmax=tmax)
-    end_time=time.time()
-    print("Time taken:", end_time-initial_time)
-    print("Total KSP iterations: ", scheme.linear_iterations)
 
 # ---------------------------------------------------------------------------- #
 # MAIN

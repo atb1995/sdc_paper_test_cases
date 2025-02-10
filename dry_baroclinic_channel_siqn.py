@@ -17,17 +17,12 @@ from firedrake import (
 )
 from firedrake.fml import subject, drop
 from gusto import (
-    Domain, CompressibleParameters, CompressibleSolver, WaterVapour, CloudWater,
+    Domain, CompressibleParameters, CompressibleSolver,
     CompressibleEulerEquations, OutputParameters, IO, logger, SSPRK3,
     DGUpwind, SemiImplicitQuasiNewton, compressible_hydrostatic_balance,
-    Perturbation, SaturationAdjustment, ForwardEuler, thermodynamics,
-    Temperature, Exner, Pressure, Split_DGUpwind,
-    time_derivative, transport, implicit, explicit, split_continuity_form,
-    horizontal, vertical,
-    SDC, IMEX_Euler, Timestepper, IMEX_SSP3, SpongeLayerParameters, IMEX_ARK2,
-    XComponent, YComponent, ZComponent, ImplicitMidpoint, prognostic, coriolis,
-    split_hv_advective_form, TrapeziumRule, IMEXRungeKutta, MixedFSLimiter,
-    ThetaLimiter, SUPGOptions, split_hv_continuity_form)
+    Perturbation, thermodynamics,
+    Temperature, Pressure, EmbeddedDGOptions,
+    XComponent, YComponent, ZComponent )
 import numpy as np
 import time
 
@@ -76,10 +71,14 @@ def dry_baroclinic_channel(
     # ------------------------------------------------------------------------ #
     # Our settings for this set up
     # ------------------------------------------------------------------------ #
+    # NB: this test seems to be unstable with 2x2 iterations
+    num_outer = 4
+    num_inner = 1
     element_order = 1
     u_eqn_type = 'vector_advection_form'
     max_iterations = 40          # max num of iterations for finding eta coords
     tolerance = 1e-10            # tolerance of error in finding eta coords
+
 
     # ------------------------------------------------------------------------ #
     # Set up model objects
@@ -101,92 +100,36 @@ def dry_baroclinic_channel(
     # Check number of optimal cores
     print("Opt Cores:", eqns.X.function_space().dim()/50000.)
 
-    eqns = split_continuity_form(eqns)
-    eqns = split_hv_advective_form(eqns, "rho")
-    eqns = split_hv_advective_form(eqns, "theta")
-    #eqns = split_hv_advective_form(eqns, "u")
-    eqns.label_terms(lambda t: not any(t.has_label(time_derivative, transport)), implicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and t.has_label(horizontal), explicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and t.has_label(vertical), implicit)
-    eqns.label_terms(lambda t: t.has_label(transport) and not any(t.has_label(horizontal, vertical)), explicit)
-    # eqns.label_terms(lambda t: t.has_label(coriolis), explicit)
-    Vt = domain.spaces('theta')
-    theta_limiter = MixedFSLimiter(
-                    eqns,
-                    {'theta': ThetaLimiter(Vt)})
-
-    opts =SUPGOptions(suboptions={"theta":[transport]})
 
     # I/O
-    dirname = 'dry_baroclinic_channel_imex_sdc_dt1800'
+    dirname = 'dry_baroclinic_channel_siqn'
     output = OutputParameters(
         dirname=dirname, dumpfreq=dumpfreq, dump_nc=True, dump_vtus=False
     )
     diagnostic_fields = [Perturbation('theta'), Temperature(eqns), Pressure(eqns), XComponent('u'), YComponent('u'), ZComponent('u')]
     io = IO(domain, output, diagnostic_fields=diagnostic_fields)
 
-    transport_methods = [DGUpwind(eqns, "u"),
-                     Split_DGUpwind(eqns, "rho"),
-                     Split_DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp)]
+    # Transport schemes
+    transported_fields = [
+        SSPRK3(domain, "u"),
+        SSPRK3(domain, "rho"),
+        SSPRK3(domain, "theta"),
+    ]
 
-    nl_solver_parameters = {
-    "snes_converged_reason": None,
-    "snes_lag_preconditioner_persists":None,
-    "snes_lag_preconditioner":-2,
-    "snes_lag_jacobian": -2,
-    "snes_lag_jacobian_persists": None,
-    'ksp_ew': None,
-    'ksp_ew_version': 1,
-    "ksp_ew_threshold": 1e-2,
-    "ksp_ew_rtol0": 1e-3,
-    "mat_type": "matfree",
-    "ksp_type": "gmres",
-    "ksp_converged_reason": None,
-    "ksp_atol": 1e-7,
-    "ksp_rtol": 1e-7,
-    "snes_atol": 1e-4,
-    "snes_rtol": 1e-4,
-    "ksp_max_it": 400,
-    "pc_type": "python",
-    "pc_python_type": "firedrake.AssembledPC","assembled": {
-        "pc_type": "python",
-        "pc_python_type": "firedrake.ASMStarPC",
-        "pc_star": {
-            "construct_dim": 0,
-            "sub_sub": {
-                "pc_type": "lu",
-                "pc_factor_mat_ordering_type": "rcm",
-                "pc_factor_reuse_ordering": None,
-                "pc_factor_reuse_fill": None,
-                "pc_factor_fill": 1.2
-            }
-        },
-    },}
+    transport_methods = [
+        DGUpwind(eqns, field) for field in
+        ["u", "rho", "theta"]
+    ]
 
-    linear_solver_parameters = {'snes_type': 'ksponly',
-                                'ksp_rtol': 1e-5,
-                                'ksp_rtol': 1e-7,
-                                'ksp_type': 'cg',
-                                'pc_type': 'bjacobi',
-                                'sub_pc_type': 'ilu'}
+    # Linear solver
+    linear_solver = CompressibleSolver(eqns)
 
-    # IMEX time stepper
-
-    base_scheme = IMEX_Euler(domain, limiter = theta_limiter, options = opts, nonlinear_solver_parameters=nl_solver_parameters, linear_solver_parameters=linear_solver_parameters)
-    node_type = "LEGENDRE"
-    qdelta_imp = "LU"
-    qdelta_exp = "FE"
-    quad_type = "GAUSS"
-    M = 2
-    k = 3
-    qdelta_imp = "LU"
-    scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
-                        qdelta_exp, formulation="Z2N", limiter = theta_limiter, options = opts,  nonlinear_solver_parameters=nl_solver_parameters,final_update=True,
-                        linear_solver_parameters=linear_solver_parameters, initial_guess="copy")
-
-    #scheme = IMEX_SSP3(domain, limiter = theta_limiter, options=opts, nonlinear_solver_parameters=nl_solver_parameters, linear_solver_parameters=linear_solver_parameters)
-    #Time stepper
-    stepper = Timestepper(eqns, scheme, io, transport_methods)
+    # Time stepper
+    stepper = SemiImplicitQuasiNewton(
+        eqns, io, transported_fields, spatial_methods=transport_methods,
+        linear_solver=linear_solver,
+        num_outer=num_outer, num_inner=num_inner
+    )
 
     # ------------------------------------------------------------------------ #
     # Initial conditions

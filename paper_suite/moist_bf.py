@@ -65,7 +65,7 @@ def moist_bryan_fritsch(
     # Our settings for this set up
     # ------------------------------------------------------------------------ #
     element_order = 1
-    u_eqn_type = 'vector_invariant_form'
+    u_eqn_type = 'vector_advection_form'
 
     # ------------------------------------------------------------------------ #
     # Set up model objects
@@ -147,12 +147,12 @@ def moist_bryan_fritsch(
     base_scheme = IMEX_Euler(domain, options=opts, nonlinear_solver_parameters=nl_solver_parameters)
     node_type = "LEGENDRE"
     qdelta_exp = "FE"
-    quad_type = "RADAU-RIGHT"
-    M = 3
-    k = 5
+    quad_type = "GAUSS"
+    M = 2
+    k = 3
     qdelta_imp = "LU"
     scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
-                        qdelta_exp, formulation="Z2N", options=opts, nonlinear_solver_parameters=nl_solver_parameters,final_update=False, initial_guess="copy")
+                        qdelta_exp, formulation="Z2N", options=opts, nonlinear_solver_parameters=nl_solver_parameters,final_update=True, initial_guess="copy")
     #scheme = IMEX_SSP3(domain, nonlinear_solver_parameters=nl_solver_parameters)
     # Time stepper
     stepper = Timestepper(eqns, scheme, io, transport_methods, physics_parametrisations=physics_schemes)

@@ -13,7 +13,7 @@ from firedrake import (
     PeriodicIntervalMesh, ExtrudedMesh, SpatialCoordinate, conditional, cos, pi,
     sqrt, NonlinearVariationalProblem, NonlinearVariationalSolver, TestFunction,
     dx, TrialFunction, Function, as_vector, LinearVariationalProblem,
-    LinearVariationalSolver, Constant
+    LinearVariationalSolver, Constant, Ensemble, COMM_WORLD
 )
 
 from gusto import (
@@ -22,22 +22,21 @@ from gusto import (
     WaterVapour, CloudWater, OutputParameters, Theta_e, SaturationAdjustment,
     ForwardEuler, saturated_hydrostatic_balance, thermodynamics, Recoverer,
     CompressibleSolver, Timestepper, split_continuity_form,
-    IMEXRungeKutta, time_derivative, transport, implicit, explicit, physics_label,
-    IMEX_Euler, SDC, SplitPhysicsTimestepper, IMEX_SSP3, source_label, SUPGOptions,
-    horizontal, vertical, Split_DGUpwind, split_hv_advective_form
+    IMEXRungeKutta, time_derivative, transport, implicit, explicit, source_label,
+    IMEX_Euler, SDC, SplitPhysicsTimestepper, MixedFSOptions, IMEX_SSP3, SUPGOptions,
+    IMEX_ARK2, split_hv_advective_form, Split_DGUpwind, horizontal, vertical, MixedFSLimiter, ThetaLimiter,
+    Parallel_SDC
 )
-
-import numpy as np
-
 import time
+import numpy as np
 
 moist_bryan_fritsch_defaults = {
     'ncolumns': 100,
     'nlayers': 100,
     'dt': 1.0,
-    'tmax': 1.0,
-    'dumpfreq': 125,
-    'dirname': 'moist_bryan_fritsch_imex_sdc_nonsplit'
+    'tmax': 1000.0,
+    'dumpfreq': 50,
+    'dirname': 'moist_bryan_fritsch_imex_sdc_paralell_ns'
 }
 
 
@@ -65,13 +64,16 @@ def moist_bryan_fritsch(
     # Our settings for this set up
     # ------------------------------------------------------------------------ #
     element_order = 1
-    u_eqn_type = 'vector_invariant_form'
+    u_eqn_type = 'vector_advection_form'
 
     # ------------------------------------------------------------------------ #
     # Set up model objects
     # ------------------------------------------------------------------------ #
 
     # Domain
+    M = 2
+    # my_ensemble = Ensemble(COMM_WORLD, COMM_WORLD.size//M)
+    #base_mesh = PeriodicIntervalMesh(ncolumns, domain_width, comm=my_ensemble.comm)
     base_mesh = PeriodicIntervalMesh(ncolumns, domain_width)
     mesh = ExtrudedMesh(
         base_mesh, layers=nlayers, layer_height=domain_height/nlayers
@@ -83,18 +85,30 @@ def moist_bryan_fritsch(
     tracers = [WaterVapour(), CloudWater()]
     eqns = CompressibleEulerEquations(
         domain, params, active_tracers=tracers, u_transport_option=u_eqn_type)
-
     eqns = split_continuity_form(eqns)
     eqns = split_hv_advective_form(eqns, "rho")
     eqns = split_hv_advective_form(eqns, "theta")
+    # eqns.label_terms(lambda t: not any(t.has_label(time_derivative, transport, physics_label)), implicit)
+    # eqns.label_terms(lambda t: t.has_label(transport), explicit)
 
+    # eqns = split_continuity_form(eqns)
 
     opts =SUPGOptions(suboptions={"theta": [transport],
-                                "water_vapour":[transport],
-                                "cloud_water": [transport]})
+                                   "water_vapour":[transport],
+                                   "cloud_water": [transport]})
+    # Vt = domain.spaces("theta")
+    # theta_limiter = MixedFSLimiter(
+    #                 eqns,
+    #                 {'theta': ThetaLimiter(Vt)})
+
+
+
     # Check number of optimal cores
     print("Opt Cores:", eqns.X.function_space().dim()/50000.)
     # I/O
+    # output = OutputParameters(
+    #     dirname=dirname+str(my_ensemble.ensemble_comm.rank), dumpfreq=dumpfreq, dump_vtus=False, dump_nc=True
+    # )
     output = OutputParameters(
         dirname=dirname, dumpfreq=dumpfreq, dump_vtus=False, dump_nc=True
     )
@@ -102,9 +116,11 @@ def moist_bryan_fritsch(
     io = IO(domain, output, diagnostic_fields=diagnostic_fields)
 
     transport_methods = [
-        DGUpwind(eqns, "u"), Split_DGUpwind(eqns, "rho"), Split_DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp),
-        DGUpwind(eqns, "water_vapour", ibp=SUPGOptions.ibp), DGUpwind(eqns, "cloud_water", ibp=SUPGOptions.ibp) 
+        DGUpwind(eqns, "u"), Split_DGUpwind(eqns, "rho"), Split_DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp), DGUpwind(eqns, "water_vapour", ibp=SUPGOptions.ibp), DGUpwind(eqns, "cloud_water", ibp=SUPGOptions.ibp) 
     ]
+    # transport_methods = [
+    #     DGUpwind(eqns, "u"), DGUpwind(eqns, "rho"), DGUpwind(eqns, "theta"), DGUpwind(eqns, "water_vapour"), DGUpwind(eqns, "cloud_water") 
+    # ]
 
     nl_solver_parameters = {
     "snes_converged_reason": None,
@@ -146,14 +162,16 @@ def moist_bryan_fritsch(
     eqns.label_terms(lambda t: t.has_label(transport) and not any(t.has_label(horizontal, vertical)), explicit)
     base_scheme = IMEX_Euler(domain, options=opts, nonlinear_solver_parameters=nl_solver_parameters)
     node_type = "LEGENDRE"
-    qdelta_exp = "FE"
-    quad_type = "RADAU-RIGHT"
-    M = 3
-    k = 5
-    qdelta_imp = "LU"
+    qdelta_exp = "MIN-SR-NS"
+    quad_type = "GAUSS"
+    k = 3
+    qdelta_imp = "MIN-SR-FLEX"
+    # scheme =Parallel_SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
+    #                     qdelta_exp, options=opts, nonlinear_solver_parameters=nl_solver_parameters,
+    #                     final_update=False, initial_guess="copy", communicator=my_ensemble)
     scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
-                        qdelta_exp, formulation="Z2N", options=opts, nonlinear_solver_parameters=nl_solver_parameters,final_update=False, initial_guess="copy")
-    #scheme = IMEX_SSP3(domain, nonlinear_solver_parameters=nl_solver_parameters)
+                        qdelta_exp, options=opts, nonlinear_solver_parameters=nl_solver_parameters,
+                        final_update=False, initial_guess="copy")
     # Time stepper
     stepper = Timestepper(eqns, scheme, io, transport_methods, physics_parametrisations=physics_schemes)
 
@@ -251,8 +269,7 @@ def moist_bryan_fritsch(
     initial_time = time.time()
     stepper.run(t=0, tmax=tmax)
     end_time=time.time()
-    print("Time taken:", end_time-initial_time)
-    print("Total KSP iterations: ", scheme.linear_iterations)
+    print("Time taken: ", end_time-initial_time)
 
 # ---------------------------------------------------------------------------- #
 # MAIN
