@@ -24,8 +24,7 @@ from gusto import (
     CompressibleSolver, Timestepper, split_continuity_form,
     IMEXRungeKutta, time_derivative, transport, implicit, explicit, source_label,
     IMEX_Euler, SDC, SplitPhysicsTimestepper, MixedFSOptions, IMEX_SSP3, SUPGOptions,
-    IMEX_ARK2, split_hv_advective_form, Split_DGUpwind, horizontal, vertical, MixedFSLimiter, ThetaLimiter,
-    Parallel_SDC
+    IMEX_ARK2, split_hv_advective_form, Split_DGUpwind, horizontal, vertical, MixedFSLimiter, ThetaLimiter
 )
 import time
 import numpy as np
@@ -35,8 +34,8 @@ moist_bryan_fritsch_defaults = {
     'nlayers': 100,
     'dt': 1.0,
     'tmax': 1000.0,
-    'dumpfreq': 50,
-    'dirname': 'moist_bryan_fritsch_imex_sdc_paralell_ns'
+    'dumpfreq': 250,
+    'dirname': 'moist_bryan_fritsch_imex_sdc_paralell'
 }
 
 
@@ -170,8 +169,8 @@ def moist_bryan_fritsch(
     #                     qdelta_exp, options=opts, nonlinear_solver_parameters=nl_solver_parameters,
     #                     final_update=False, initial_guess="copy", communicator=my_ensemble)
     scheme =SDC(base_scheme, domain, M, k, quad_type, node_type, qdelta_imp,
-                        qdelta_exp, options=opts, nonlinear_solver_parameters=nl_solver_parameters,
-                        final_update=False, initial_guess="copy")
+                        qdelta_exp, formulation="Z2N", options=opts, nonlinear_solver_parameters=nl_solver_parameters,final_update=True, initial_guess="copy")
+    #scheme = IMEX_SSP3(domain, nonlinear_solver_parameters=nl_solver_parameters)
     # Time stepper
     stepper = Timestepper(eqns, scheme, io, transport_methods, physics_parametrisations=physics_schemes)
 

@@ -35,9 +35,9 @@ moist_bryan_fritsch_defaults = {
     'ncolumns': 100,
     'nlayers': 100,
     'dt': 1.0,
-    'tmax': 1.0,
-    'dumpfreq': 125,
-    'dirname': 'moist_bryan_fritsch_imex_sdc_nonsplit'
+    'tmax': 1000.0,
+    'dumpfreq': 250,
+    'dirname': 'moist_bryan_fritsch_imex_sdc'
 }
 
 
@@ -82,7 +82,8 @@ def moist_bryan_fritsch(
     params = CompressibleParameters()
     tracers = [WaterVapour(), CloudWater()]
     eqns = CompressibleEulerEquations(
-        domain, params, active_tracers=tracers, u_transport_option=u_eqn_type)
+        domain, params, active_tracers=tracers, u_transport_option=u_eqn_type
+        )
 
     eqns = split_continuity_form(eqns)
     eqns = split_hv_advective_form(eqns, "rho")

@@ -64,6 +64,7 @@ def skamarock_klemp_nonhydrostatic(
     # ------------------------------------------------------------------------ #
 
     element_order = 1
+    u_eqn_type = 'vector_advection_form'
 
     # ------------------------------------------------------------------------ #
     # Set up model objects
@@ -73,10 +74,11 @@ def skamarock_klemp_nonhydrostatic(
     base_mesh = PeriodicIntervalMesh(ncolumns, domain_width)
     mesh = ExtrudedMesh(base_mesh, nlayers, layer_height=domain_height/nlayers)
     domain = Domain(mesh, dt, "CG", element_order)
+    
 
     # Equation
     parameters = CompressibleParameters()
-    eqns = CompressibleEulerEquations(domain, parameters)
+    eqns = CompressibleEulerEquations(domain, parameters, u_transport_option=u_eqn_type)
     eqns = split_continuity_form(eqns)
     eqns = split_hv_advective_form(eqns, "rho")
     eqns = split_hv_advective_form(eqns, "theta")
@@ -110,7 +112,7 @@ def skamarock_klemp_nonhydrostatic(
     # theta_opts = SUPGOptions(field_names=["theta"])
     transport_methods = [DGUpwind(eqns, "u"),
                         Split_DGUpwind(eqns, "rho"),
-                        Split_DGUpwind(eqns, "theta")]
+                        Split_DGUpwind(eqns, "theta", ibp=SUPGOptions.ibp)]
     nl_solver_parameters = {
     "snes_converged_reason": None,
     "snes_lag_preconditioner_persists":None,

@@ -32,9 +32,9 @@ import numpy as np
 import time
 
 dry_baroclinic_channel_defaults = {
-    'nx': 100,                  # number of columns in x-direction
-    'ny': 15,                  # number of columns in y-direction
-    'nlayers': 15,             # number of layers in mesh
+    'nx': 160,                  # number of columns in x-direction
+    'ny': 24,                  # number of columns in y-direction
+    'nlayers': 20,             # number of layers in mesh
     'dt': 1800,                # 30 minutes
     'tmax': 24*60*60*12,            # 15 days
     'dumpfreq': 48,           # Corresponds to every 1 day with default opts
@@ -62,6 +62,7 @@ def dry_baroclinic_channel(
     phi0 = Constant(pi/4)        # latitude of centre of channel, in radians
     a = Constant(6.371229e6)     # radius of earth, in m
     b = Constant(2)              # vertical width parameter, dimensionless
+    Ts = Constant(260.)          # surface temperature, in K
     T0 = Constant(288.)          # reference temperature, in K
     u0 = Constant(35.)           # reference zonal wind speed, in m/s
     Gamma = Constant(0.005)      # lapse rate, in K/m
@@ -118,7 +119,7 @@ def dry_baroclinic_channel(
     opts =SUPGOptions(suboptions={"theta":[transport]})
 
     # I/O
-    dirname = 'dry_baroclinic_channel_imex_sdc_dt1800'
+    dirname = 'dry_baroclinic_channel_imex_sdc_dt1800_dx200'
     output = OutputParameters(
         dirname=dirname, dumpfreq=dumpfreq, dump_nc=True, dump_vtus=False
     )
@@ -194,6 +195,8 @@ def dry_baroclinic_channel(
 
     # Physical parameters
     beta0 = 2 * omega * cos(phi0) / a
+
+    beta0 = Constant(0.)
     Rd = params.R_d
     Rv = params.R_v
     f0 = 2 * omega * sin(phi0)
